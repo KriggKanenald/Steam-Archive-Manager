@@ -1,0 +1,6 @@
+config.json
+backups/
+__pycache__/
+*.pyc
+Steam Archive Manager - USB/
+portable-python/
