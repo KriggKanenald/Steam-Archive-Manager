@@ -28,7 +28,15 @@ The program scans the Steam installation folder, lists installed games, displays
 
 ## Installation
 
-Install the required Python dependencies:
+On Windows, run the setup script once:
+
+```text
+Setup Python and Dependencies.cmd
+```
+
+The script checks for Python and Pillow, installs the dependencies from `requirements.txt`, and can try to install Python with `winget` if Python is missing.
+
+You can also install the required Python dependencies manually:
 
 ```bash
 pip install -r requirements.txt

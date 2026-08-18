@@ -70,6 +70,7 @@ GAME_ROW_HEIGHT = HEADER_IMAGE_SIZE[1]
 SECTION_ROW_HEIGHT = 28
 VIRTUAL_SCROLL_UNIT_PIXELS = 42
 VIRTUAL_RENDER_BUFFER_PIXELS = GAME_ROW_HEIGHT * 2
+MOUSEWHEEL_DELTA_UNIT = 120
 AUTOSCROLL_INTERVAL_MS = 16
 AUTOSCROLL_DEAD_ZONE_PIXELS = 12
 AUTOSCROLL_SPEED_DIVISOR = 8
@@ -545,6 +546,7 @@ class SteamManagerApp:
         self.autoscroll_current_y = 0
         self.autoscroll_after_id = None
         self.autoscroll_previous_cursor = ""
+        self.mousewheel_pixel_remainder = 0.0
         self.refresh_request_id = 0
         self.is_refreshing = False
         self.pending_render_after_id = None
@@ -753,10 +755,23 @@ class SteamManagerApp:
         self.update_button.config(text=self.t("button_update"))
         self.update_all_button.config(text=self.t("button_update_all"))
 
-    def on_mousewheel(self, event: tk.Event) -> None:
-        wheel_steps = int(-1 * (event.delta / 120))
-        if wheel_steps:
-            self.scroll_virtual_pixels(wheel_steps * VIRTUAL_SCROLL_UNIT_PIXELS)
+    def on_mousewheel(self, event: tk.Event) -> str:
+        if not self.display_items:
+            return "break"
+
+        scroll_delta = (
+            -event.delta
+            / MOUSEWHEEL_DELTA_UNIT
+            * VIRTUAL_SCROLL_UNIT_PIXELS
+        )
+        self.mousewheel_pixel_remainder += scroll_delta
+
+        pixel_delta = int(self.mousewheel_pixel_remainder)
+        if pixel_delta:
+            self.mousewheel_pixel_remainder -= pixel_delta
+            self.scroll_virtual_pixels(pixel_delta)
+
+        return "break"
 
     def on_middle_click(self, event: tk.Event) -> str | None:
         if self.autoscroll_active:
