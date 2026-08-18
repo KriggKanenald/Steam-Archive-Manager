@@ -940,7 +940,7 @@ class SteamManagerApp:
 
         scan_thread = threading.Thread(
             target=self.run_game_scan_worker,
-            args=(refresh_request_id, steam_path),
+            args=(refresh_request_id, steam_path, preserved_scroll_y),
             daemon=True,
         )
         scan_thread.start()
@@ -949,6 +949,7 @@ class SteamManagerApp:
         self,
         refresh_request_id: int,
         steam_path: Path,
+        preserved_scroll_y: int,
     ) -> None:
         try:
             games = self.find_installed_games(steam_path)
