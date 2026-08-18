@@ -534,6 +534,10 @@ class SteamManagerApp:
         self.table_message = ""
         self.table_body_width = 1
         self.table_fixed_columns_width = TABLE_DEFAULT_FIXED_COLUMNS_WIDTH
+        self.table_column_widths = {
+            column: 1
+            for column in TABLE_FIXED_COLUMNS
+        }
         self.visible_row_slots = []
         self.rendered_item_range = None
         self.autoscroll_active = False
@@ -910,9 +914,10 @@ class SteamManagerApp:
             max(0, min(1, last)),
         )
 
-    def refresh_game_list(self) -> None:
+    def refresh_game_list(self, preserve_scroll: bool = False) -> None:
         self.refresh_request_id += 1
         refresh_request_id = self.refresh_request_id
+        preserved_scroll_y = self.virtual_scroll_y if preserve_scroll else 0
         self.cancel_pending_game_render()
 
         steam_path_value = self.config.data.get("steam_path", "")
@@ -960,6 +965,7 @@ class SteamManagerApp:
                 refresh_request_id,
                 games,
                 error_message,
+                preserved_scroll_y,
             )
         )
 
@@ -974,6 +980,7 @@ class SteamManagerApp:
         refresh_request_id: int,
         games: list[SteamGame],
         error_message: str,
+        preserved_scroll_y: int = 0,
     ) -> None:
         if refresh_request_id != self.refresh_request_id:
             return
@@ -992,7 +999,7 @@ class SteamManagerApp:
             return
 
         display_items = self.get_game_display_items(games)
-        self.set_virtual_display_items(display_items)
+        self.set_virtual_display_items(display_items, preserved_scroll_y)
         self.complete_game_refresh(refresh_request_id)
 
     def clear_game_table(self) -> None:
@@ -1026,11 +1033,15 @@ class SteamManagerApp:
 
         return display_items
 
-    def set_virtual_display_items(self, display_items: list[tuple[str, object]]) -> None:
+    def set_virtual_display_items(
+        self,
+        display_items: list[tuple[str, object]],
+        scroll_y: int = 0,
+    ) -> None:
         self.display_items = display_items
         self.display_item_offsets = []
         self.total_content_height = 0
-        self.virtual_scroll_y = 0
+        self.virtual_scroll_y = max(0, scroll_y)
         self.table_message = ""
 
         for item in self.display_items:
@@ -1044,6 +1055,7 @@ class SteamManagerApp:
                 self.games_by_path[game_path] = game
                 self.game_selection[game_path] = tk.BooleanVar(value=False)
 
+        self.clamp_virtual_scroll()
         self.render_visible_game_rows()
         self.update_select_all_state()
         self.update_virtual_scrollbar()
@@ -1148,14 +1160,22 @@ class SteamManagerApp:
                 widget.winfo_reqwidth(),
             )
 
+        column_widths[2] = max(column_widths.get(2, 0), HEADER_IMAGE_SIZE[0])
         fixed_columns_width = sum(column_widths.values())
         if fixed_columns_width > 0:
+            self.table_column_widths.update(column_widths)
             self.table_fixed_columns_width = fixed_columns_width
 
     def get_table_flex_column_width(self) -> int:
         return max(1, self.table_body_width - self.table_fixed_columns_width)
 
     def configure_table_columns(self, frame: tk.Widget) -> None:
+        for column in TABLE_FIXED_COLUMNS:
+            frame.columnconfigure(
+                column,
+                minsize=self.table_column_widths.get(column, 1),
+                weight=0,
+            )
         frame.columnconfigure(
             TABLE_FLEX_COLUMN,
             minsize=self.get_table_flex_column_width(),
@@ -2227,7 +2247,7 @@ class SteamManagerApp:
         self.clear_current_7zip_process()
         self.destroy_progress_window()
         self.set_operation_controls_enabled(True)
-        self.refresh_game_list()
+        self.refresh_game_list(preserve_scroll=True)
 
         if success:
             messagebox.showinfo(APP_TITLE, message)
