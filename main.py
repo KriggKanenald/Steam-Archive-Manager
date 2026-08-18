@@ -71,6 +71,7 @@ SECTION_ROW_HEIGHT = 28
 VIRTUAL_SCROLL_UNIT_PIXELS = 42
 VIRTUAL_RENDER_BUFFER_PIXELS = GAME_ROW_HEIGHT * 2
 MOUSEWHEEL_DELTA_UNIT = 120
+TOUCHPAD_SCROLL_MULTIPLIER = 1
 AUTOSCROLL_INTERVAL_MS = 16
 AUTOSCROLL_DEAD_ZONE_PIXELS = 12
 AUTOSCROLL_SPEED_DIVISOR = 8
@@ -733,17 +734,9 @@ class SteamManagerApp:
             "<Configure>",
             self.on_canvas_configure,
         )
-        self.game_canvas.bind(
-            "<Enter>",
-            lambda event: self.game_canvas.bind_all(
-                "<MouseWheel>",
-                self.on_mousewheel,
-            ),
-        )
-        self.game_canvas.bind(
-            "<Leave>",
-            lambda event: self.game_canvas.unbind_all("<MouseWheel>"),
-        )
+        self.root.bind_all("<MouseWheel>", self.on_mousewheel, add="+")
+        self.root.bind_all("<Button-4>", self.on_mousewheel, add="+")
+        self.root.bind_all("<Button-5>", self.on_mousewheel, add="+")
         self.root.bind_all("<Button-2>", self.on_middle_click, add="+")
         self.root.bind_all("<Motion>", self.on_autoscroll_motion, add="+")
         self.root.bind_all("<Escape>", self.cancel_autoscroll, add="+")
@@ -755,15 +748,14 @@ class SteamManagerApp:
         self.update_button.config(text=self.t("button_update"))
         self.update_all_button.config(text=self.t("button_update_all"))
 
-    def on_mousewheel(self, event: tk.Event) -> str:
-        if not self.display_items:
-            return "break"
+    def on_mousewheel(self, event: tk.Event) -> str | None:
+        if not self.display_items or not self.is_event_inside_game_canvas(event):
+            return None
 
-        scroll_delta = (
-            -event.delta
-            / MOUSEWHEEL_DELTA_UNIT
-            * VIRTUAL_SCROLL_UNIT_PIXELS
-        )
+        scroll_delta = self.get_mousewheel_scroll_delta(event)
+        if scroll_delta == 0:
+            return None
+
         self.mousewheel_pixel_remainder += scroll_delta
 
         pixel_delta = int(self.mousewheel_pixel_remainder)
@@ -772,6 +764,22 @@ class SteamManagerApp:
             self.scroll_virtual_pixels(pixel_delta)
 
         return "break"
+
+    def get_mousewheel_scroll_delta(self, event: tk.Event) -> float:
+        event_number = getattr(event, "num", None)
+        if event_number == 4:
+            return -VIRTUAL_SCROLL_UNIT_PIXELS
+        if event_number == 5:
+            return VIRTUAL_SCROLL_UNIT_PIXELS
+
+        raw_delta = getattr(event, "delta", 0)
+        if raw_delta == 0:
+            return 0
+
+        if abs(raw_delta) < MOUSEWHEEL_DELTA_UNIT:
+            return -raw_delta * TOUCHPAD_SCROLL_MULTIPLIER
+
+        return -raw_delta / MOUSEWHEEL_DELTA_UNIT * VIRTUAL_SCROLL_UNIT_PIXELS
 
     def on_middle_click(self, event: tk.Event) -> str | None:
         if self.autoscroll_active:
