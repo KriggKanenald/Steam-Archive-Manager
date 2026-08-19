@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from bisect import bisect_right
@@ -2565,7 +2566,7 @@ class SteamManagerApp:
             raise RuntimeError(self.t("message_folder_empty", game_name=game.name))
 
         archive_path = self.get_available_archive_path(game.folder)
-        entry_names = [entry.name for entry in source_entries]
+        listfile_path = self.create_7zip_listfile(source_entries)
 
         try:
             self.schedule_operation_step(progress_context, self.t("progress_compression"))
@@ -2574,7 +2575,8 @@ class SteamManagerApp:
                     seven_zip_executables.gui_path,
                     "a",
                     str(archive_path),
-                    *entry_names,
+                    f"@{listfile_path}",
+                    "-scsUTF-8",
                     "-mx=9",
                     "-bb0",
                 ],
@@ -2597,6 +2599,8 @@ class SteamManagerApp:
         except Exception:
             self.delete_file_if_safe(archive_path, game.folder)
             raise
+        finally:
+            self.delete_temp_file(listfile_path)
 
         self.delete_original_entries(game.folder, source_entries, archive_path)
 
@@ -2753,6 +2757,28 @@ class SteamManagerApp:
             raise RuntimeError(
                 self.t("message_read_folder_error", folder=folder, error=error)
             ) from error
+
+    def create_7zip_listfile(self, entries: list[Path]) -> Path:
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                newline="\n",
+                suffix=".txt",
+                prefix="steam_archive_manager_",
+                delete=False,
+            ) as listfile:
+                for entry in entries:
+                    listfile.write(f"{entry.name}\n")
+                return Path(listfile.name)
+        except OSError as error:
+            raise RuntimeError(str(error)) from error
+
+    def delete_temp_file(self, file_path: Path) -> None:
+        try:
+            file_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def get_available_archive_path(self, game_folder: Path) -> Path:
         archive_path = game_folder / f"{game_folder.name}.7z"
