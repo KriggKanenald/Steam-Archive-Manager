@@ -131,6 +131,11 @@ TEXTS = {
         "menu_file": "File",
         "menu_steam_path": "Steam path...",
         "menu_quit": "Quit",
+        "menu_filtering": "Filtering",
+        "filter_up_to_date": "Up to date",
+        "filter_not_up_to_date": "Not up to date",
+        "filter_compressed": "Compressed",
+        "filter_uncompressed": "Uncompressed",
         "menu_configuration": "Configuration",
         "menu_language": "Language",
         "button_refresh": "Refresh list",
@@ -145,6 +150,7 @@ TEXTS = {
         "message_read_steam_error": "Unable to read the Steam folder: {error}",
         "message_scanning_games": "Scanning Steam library...",
         "message_no_games": "No game found in steamapps/common.",
+        "message_no_games_after_filter": "No game matches the active filters.",
         "column_header": "Header",
         "column_game_name": "Game name",
         "column_game_id": "Game ID",
@@ -271,6 +277,11 @@ TEXTS = {
         "menu_file": "Fichier",
         "menu_steam_path": "Chemin d'accès Steam...",
         "menu_quit": "Quitter",
+        "menu_filtering": "Filtrage",
+        "filter_up_to_date": "À jour",
+        "filter_not_up_to_date": "Pas à jour",
+        "filter_compressed": "Compressé",
+        "filter_uncompressed": "Non compressé",
         "menu_configuration": "Configuration",
         "menu_language": "Langue",
         "button_refresh": "Rafraîchir la liste",
@@ -285,6 +296,7 @@ TEXTS = {
         "message_read_steam_error": "Impossible de lire le dossier Steam : {error}",
         "message_scanning_games": "Analyse de la bibliothèque Steam...",
         "message_no_games": "Aucun jeu trouvé dans steamapps/common.",
+        "message_no_games_after_filter": "Aucun jeu ne correspond aux filtres actifs.",
         "column_header": "Bannière",
         "column_game_name": "Nom du jeu",
         "column_game_id": "ID du jeu",
@@ -530,6 +542,7 @@ class SteamManagerApp:
         self.games_by_path = {}
         self.header_images = []
         self.header_image_cache = {}
+        self.scanned_games = []
         self.display_items = []
         self.display_item_offsets = []
         self.total_content_height = 0
@@ -571,6 +584,10 @@ class SteamManagerApp:
         self.progress_percent_var = tk.StringVar(value="0%")
         self.progress_value_var = tk.DoubleVar(value=0)
         self.select_all_var = tk.BooleanVar(value=False)
+        self.filter_up_to_date_var = tk.BooleanVar(value=True)
+        self.filter_not_up_to_date_var = tk.BooleanVar(value=True)
+        self.filter_compressed_var = tk.BooleanVar(value=True)
+        self.filter_uncompressed_var = tk.BooleanVar(value=True)
 
         self.root.title(APP_TITLE)
         self.apply_saved_window_size()
@@ -623,6 +640,29 @@ class SteamManagerApp:
         file_menu.add_separator()
         file_menu.add_command(label=self.t("menu_quit"), command=self.quit_application)
 
+        filtering_menu = tk.Menu(menu_bar, tearoff=0)
+        filtering_menu.add_checkbutton(
+            label=self.t("filter_up_to_date"),
+            variable=self.filter_up_to_date_var,
+            command=self.apply_game_filters,
+        )
+        filtering_menu.add_checkbutton(
+            label=self.t("filter_not_up_to_date"),
+            variable=self.filter_not_up_to_date_var,
+            command=self.apply_game_filters,
+        )
+        filtering_menu.add_separator()
+        filtering_menu.add_checkbutton(
+            label=self.t("filter_compressed"),
+            variable=self.filter_compressed_var,
+            command=self.apply_game_filters,
+        )
+        filtering_menu.add_checkbutton(
+            label=self.t("filter_uncompressed"),
+            variable=self.filter_uncompressed_var,
+            command=self.apply_game_filters,
+        )
+
         configuration_menu = tk.Menu(menu_bar, tearoff=0)
         language_menu = tk.Menu(configuration_menu, tearoff=0)
         for language_code in ("en", "fr"):
@@ -640,6 +680,7 @@ class SteamManagerApp:
         )
 
         menu_bar.add_cascade(label=self.t("menu_file"), menu=file_menu)
+        menu_bar.add_cascade(label=self.t("menu_filtering"), menu=filtering_menu)
         menu_bar.add_cascade(
             label=self.t("menu_configuration"),
             menu=configuration_menu,
@@ -946,6 +987,7 @@ class SteamManagerApp:
 
         steam_path_value = self.config.data.get("steam_path", "")
         if not steam_path_value:
+            self.scanned_games = []
             self.clear_game_table()
             self.add_table_header()
             self.path_status_label.config(text=self.t("status_steam_path_missing"))
@@ -1010,6 +1052,7 @@ class SteamManagerApp:
         if refresh_request_id != self.refresh_request_id:
             return
 
+        self.scanned_games = games
         self.clear_game_table()
         self.add_table_header()
 
@@ -1024,6 +1067,11 @@ class SteamManagerApp:
             return
 
         display_items = self.get_game_display_items(games)
+        if not display_items:
+            self.show_game_message(self.t("message_no_games_after_filter"))
+            self.complete_game_refresh(refresh_request_id)
+            return
+
         self.set_virtual_display_items(display_items, preserved_scroll_y)
         self.complete_game_refresh(refresh_request_id)
 
@@ -1047,8 +1095,13 @@ class SteamManagerApp:
         self.update_virtual_scrollbar()
 
     def get_game_display_items(self, games: list[SteamGame]) -> list[tuple[str, object]]:
-        games_only = [game for game in games if not self.is_tool(game)]
-        tools = [game for game in games if self.is_tool(game)]
+        filtered_games = [
+            game
+            for game in games
+            if self.game_matches_active_filters(game)
+        ]
+        games_only = [game for game in filtered_games if not self.is_tool(game)]
+        tools = [game for game in filtered_games if self.is_tool(game)]
         display_items: list[tuple[str, object]] = [
             ("game", game) for game in games_only
         ]
@@ -1057,6 +1110,36 @@ class SteamManagerApp:
             display_items.extend(("game", tool) for tool in tools)
 
         return display_items
+
+    def apply_game_filters(self) -> None:
+        if not self.scanned_games:
+            return
+
+        self.clear_game_table()
+        display_items = self.get_game_display_items(self.scanned_games)
+        if not display_items:
+            self.show_game_message(self.t("message_no_games_after_filter"))
+            return
+
+        self.set_virtual_display_items(display_items)
+
+    def game_matches_active_filters(self, game: SteamGame) -> bool:
+        is_up_to_date = self.is_game_up_to_date(game)
+        if is_up_to_date and not self.filter_up_to_date_var.get():
+            return False
+        if not is_up_to_date and not self.filter_not_up_to_date_var.get():
+            return False
+
+        compression_state = game.compression_state.strip().casefold()
+        if compression_state == COMPRESSED_STATE:
+            return self.filter_compressed_var.get()
+        if compression_state == UNCOMPRESSED_STATE:
+            return self.filter_uncompressed_var.get()
+
+        return (
+            self.filter_compressed_var.get()
+            and self.filter_uncompressed_var.get()
+        )
 
     def set_virtual_display_items(
         self,
@@ -1732,7 +1815,7 @@ class SteamManagerApp:
 
         games = [
             game
-            for game in self.games_by_path.values()
+            for game in (self.scanned_games or self.games_by_path.values())
             if not self.is_tool(game)
         ]
         self.refresh_games_metadata(games, steam_path)
