@@ -88,6 +88,7 @@ LANGUAGE_LABELS = {
 STEAM_UPDATE_POLL_INTERVAL_SECONDS = 5
 STEAM_UPDATE_TIMEOUT_SECONDS = 6 * 60 * 60
 STEAM_UPDATE_STABLE_POLLS = 2
+STEAM_STATE_UPDATE_REQUIRED = 2
 COLUMN_SEPARATOR_COLOR = "#dddddd"
 TABLE_CELL_PAD_X = 6
 TABLE_FLEX_COLUMN = 4
@@ -446,6 +447,7 @@ class SteamGame:
     name: str
     version: str
     latest_version: str
+    steam_update_required: bool
     header_path: Path | None
 
 
@@ -2574,6 +2576,7 @@ class SteamManagerApp:
             manifest_target_version = self.get_manifest_target_version(manifest)
             if manifest_target_version:
                 target_version = manifest_target_version
+            steam_update_required = self.manifest_requires_steam_update(manifest)
 
             detail = (
                 f"{game_index}/{game_count} - {self.t('progress_wait_steam')} - "
@@ -2582,10 +2585,11 @@ class SteamManagerApp:
             )
             self.schedule_progress_detail(detail)
 
-            if current_version == target_version:
+            if current_version == target_version and not steam_update_required:
                 stable_match_count += 1
                 if stable_match_count >= STEAM_UPDATE_STABLE_POLLS:
                     game.version = current_version
+                    game.steam_update_required = False
                     return
             else:
                 stable_match_count = 0
@@ -3352,6 +3356,9 @@ class SteamManagerApp:
         }
 
     def is_game_up_to_date(self, game: SteamGame) -> bool:
+        if game.steam_update_required:
+            return False
+
         installed_version = game.version.strip()
         latest_version = game.latest_version.strip()
         return bool(
@@ -3485,6 +3492,9 @@ class SteamManagerApp:
                     name=manifest.get("name") or game_folder.name,
                     version=manifest.get("buildid") or UNKNOWN_VERSION,
                     latest_version=self.get_latest_version_text(manifest, metadata),
+                    steam_update_required=self.manifest_requires_steam_update(
+                        manifest
+                    ),
                     header_path=self.find_header_path(steam_path, app_id),
                 )
             )
@@ -3518,22 +3528,32 @@ class SteamManagerApp:
         app_metadata: dict[str, str],
     ) -> str:
         installed_version = manifest.get("buildid", "").strip()
+        latest_version = app_metadata.get("latest_version", "").strip()
+        manifest_target_version = self.get_manifest_target_version(manifest)
+
+        if self.manifest_requires_steam_update(manifest):
+            if manifest_target_version:
+                return manifest_target_version
+            if latest_version:
+                return latest_version
+            if installed_version:
+                return installed_version
+            return UNAVAILABLE_VERSION
+
         if installed_version and self.installed_depot_manifests_are_current(
             manifest,
             app_metadata,
         ):
             return installed_version
 
-        manifest_target_version = self.get_manifest_target_version(manifest)
         if manifest_target_version:
             return manifest_target_version
 
-        if installed_version:
-            return installed_version
-
-        latest_version = app_metadata.get("latest_version", "").strip()
         if latest_version:
             return latest_version
+
+        if installed_version:
+            return installed_version
 
         return UNAVAILABLE_VERSION
 
@@ -3593,6 +3613,14 @@ class SteamManagerApp:
 
         return ""
 
+    def manifest_requires_steam_update(self, manifest: dict[str, str]) -> bool:
+        try:
+            state_flags = int(manifest.get("stateflags", "0"))
+        except (TypeError, ValueError):
+            return False
+
+        return bool(state_flags & STEAM_STATE_UPDATE_REQUIRED)
+
     def refresh_games_metadata(
         self,
         games: list[SteamGame],
@@ -3612,6 +3640,9 @@ class SteamManagerApp:
             if manifest:
                 game.version = manifest.get("buildid") or UNKNOWN_VERSION
                 game.latest_version = self.get_latest_version_text(manifest, metadata)
+                game.steam_update_required = self.manifest_requires_steam_update(
+                    manifest
+                )
                 game.name = manifest.get("name") or game.name
 
     def get_appmanifest_path(self, steam_path: Path, app_id: str) -> Path:
