@@ -66,6 +66,7 @@ except ImportError:
 
 APP_TITLE = "Steam Archive Manager"
 CONFIG_FILE = Path(__file__).with_name("config.json")
+COMPRESSION_IGNORE_FILE = Path(__file__).with_name("compression_ignored_entries.txt")
 HEADER_IMAGE_SIZE = (184, 86)
 GAME_ROW_HEIGHT = HEADER_IMAGE_SIZE[1]
 SECTION_ROW_HEIGHT = 28
@@ -1989,7 +1990,10 @@ class SteamManagerApp:
             return
 
         for game in selected_games:
-            game.compression_state = self.get_compression_state(game.folder)
+            game.compression_state = self.get_compression_state(
+                game.folder,
+                game.app_id,
+            )
 
         selected_states = {game.compression_state for game in selected_games}
         if len(selected_states) > 1:
@@ -2698,7 +2702,7 @@ class SteamManagerApp:
         progress_context: str | None = None,
     ) -> None:
         self.raise_if_operation_cancelled()
-        archive_path = self.get_only_archive_path(game.folder)
+        archive_path = self.get_only_archive_path(game.folder, game.app_id)
 
         self.schedule_operation_step(progress_context, self.t("progress_verify_archive"))
         self.run_7zip_command(
@@ -2720,6 +2724,7 @@ class SteamManagerApp:
                     "x",
                     str(archive_path),
                     f"-o{game.folder}",
+                    "-aos",
                     "-y",
                     "-bb0",
                 ],
@@ -2729,7 +2734,11 @@ class SteamManagerApp:
             )
             self.raise_if_operation_cancelled()
         except Exception:
-            self.cleanup_decompression_output(game.folder, archive_path)
+            self.cleanup_decompression_output(
+                game.folder,
+                archive_path,
+                game.app_id,
+            )
             raise
 
         self.delete_file_if_safe(archive_path, game.folder)
@@ -2879,8 +2888,8 @@ class SteamManagerApp:
                 return archive_path
             counter += 1
 
-    def get_only_archive_path(self, game_folder: Path) -> Path:
-        folder_content = self.get_folder_entries(game_folder)
+    def get_only_archive_path(self, game_folder: Path, app_id: str = "") -> Path:
+        folder_content = self.get_compression_relevant_entries(game_folder, app_id)
         archives = [
             entry
             for entry in folder_content
@@ -2902,6 +2911,7 @@ class SteamManagerApp:
         self,
         game_folder: Path,
         archive_path: Path,
+        app_id: str = "",
     ) -> None:
         try:
             entries = list(game_folder.iterdir())
@@ -2909,8 +2919,16 @@ class SteamManagerApp:
             return
 
         resolved_archive_path = archive_path.resolve()
+        ignored_entries = self.read_compression_ignored_entries()
         for entry in entries:
             if entry.resolve() == resolved_archive_path:
+                continue
+            if self.is_compression_ignored_entry(
+                game_folder,
+                entry,
+                app_id,
+                ignored_entries,
+            ):
                 continue
             self.delete_entry_if_safe(entry, game_folder)
 
@@ -3488,7 +3506,10 @@ class SteamManagerApp:
                     folder=game_folder,
                     app_id=app_id,
                     app_type=app_type,
-                    compression_state=self.get_compression_state(game_folder),
+                    compression_state=self.get_compression_state(
+                        game_folder,
+                        app_id,
+                    ),
                     name=manifest.get("name") or game_folder.name,
                     version=manifest.get("buildid") or UNKNOWN_VERSION,
                     latest_version=self.get_latest_version_text(manifest, metadata),
@@ -3504,10 +3525,13 @@ class SteamManagerApp:
     def is_app_type_tool(self, app_type: str) -> bool:
         return app_type.casefold() == "tool"
 
-    def get_compression_state(self, game_folder: Path) -> str:
+    def get_compression_state(self, game_folder: Path, app_id: str = "") -> str:
         try:
-            folder_content = list(game_folder.iterdir())
-        except OSError:
+            folder_content = self.get_compression_relevant_entries(
+                game_folder,
+                app_id,
+            )
+        except RuntimeError:
             return UNKNOWN_STATE
 
         if len(folder_content) != 1:
@@ -3521,6 +3545,153 @@ class SteamManagerApp:
             return COMPRESSED_STATE
 
         return UNCOMPRESSED_STATE
+
+    def get_compression_relevant_entries(
+        self,
+        game_folder: Path,
+        app_id: str = "",
+    ) -> list[Path]:
+        folder_content = self.get_folder_entries(game_folder)
+        ignored_entries = self.read_compression_ignored_entries()
+
+        return [
+            entry
+            for entry in folder_content
+            if not self.is_compression_ignored_entry(
+                game_folder,
+                entry,
+                app_id,
+                ignored_entries,
+            )
+        ]
+
+    def is_compression_ignored_entry(
+        self,
+        game_folder: Path,
+        entry: Path,
+        app_id: str,
+        ignored_entries: dict[str, set[str]] | None = None,
+    ) -> bool:
+        if ignored_entries is None:
+            ignored_entries = self.read_compression_ignored_entries()
+        app_ignored_entries = ignored_entries.get(str(app_id).strip(), set())
+        if not app_ignored_entries:
+            return False
+
+        try:
+            relative_entry = entry.relative_to(game_folder)
+        except ValueError:
+            return False
+
+        normalized_entry = self.normalize_compression_ignore_entry(relative_entry)
+        if self.compression_ignore_path_matches(
+            normalized_entry,
+            app_ignored_entries,
+        ):
+            return True
+
+        if entry.is_dir():
+            return self.compression_directory_contains_only_ignored_entries(
+                game_folder,
+                entry,
+                app_ignored_entries,
+            )
+
+        return False
+
+    def compression_directory_contains_only_ignored_entries(
+        self,
+        game_folder: Path,
+        directory: Path,
+        app_ignored_entries: set[str],
+    ) -> bool:
+        try:
+            children = list(directory.iterdir())
+        except OSError:
+            return False
+
+        if not children:
+            relative_directory = directory.relative_to(game_folder)
+            normalized_directory = self.normalize_compression_ignore_entry(
+                relative_directory
+            )
+            return any(
+                ignored_entry.startswith(f"{normalized_directory}/")
+                for ignored_entry in app_ignored_entries
+            )
+
+        for child in children:
+            relative_child = child.relative_to(game_folder)
+            normalized_child = self.normalize_compression_ignore_entry(relative_child)
+            if self.compression_ignore_path_matches(
+                normalized_child,
+                app_ignored_entries,
+            ):
+                continue
+            child_directory_is_ignored = (
+                child.is_dir()
+                and self.compression_directory_contains_only_ignored_entries(
+                    game_folder,
+                    child,
+                    app_ignored_entries,
+                )
+            )
+            if child_directory_is_ignored:
+                continue
+            return False
+
+        return True
+
+    def compression_ignore_path_matches(
+        self,
+        normalized_entry: str,
+        app_ignored_entries: set[str],
+    ) -> bool:
+        return any(
+            normalized_entry == ignored_entry
+            or normalized_entry.startswith(f"{ignored_entry}/")
+            for ignored_entry in app_ignored_entries
+        )
+
+    def read_compression_ignored_entries(self) -> dict[str, set[str]]:
+        try:
+            content = COMPRESSION_IGNORE_FILE.read_text(
+                encoding="utf-8",
+                errors="ignore",
+            )
+        except OSError:
+            return {}
+
+        ignored_entries = {}
+        current_app_id = None
+        for line in content.splitlines():
+            entry = line.strip()
+            if not entry or entry.startswith("#"):
+                continue
+            if set(entry) == {"-"}:
+                continue
+
+            app_id_match = re.search(r"\bID\s*:?\s*(\d+)\b", entry, re.IGNORECASE)
+            if app_id_match:
+                current_app_id = app_id_match.group(1)
+                ignored_entries.setdefault(current_app_id, set())
+                continue
+
+            if current_app_id is None:
+                continue
+
+            normalized_entry = self.normalize_compression_ignore_entry(entry)
+            if normalized_entry:
+                ignored_entries[current_app_id].add(normalized_entry)
+
+        return ignored_entries
+
+    def normalize_compression_ignore_entry(self, entry: str | Path) -> str:
+        normalized_entry = str(entry).replace("\\", "/").strip().strip("/")
+        while normalized_entry.startswith("./"):
+            normalized_entry = normalized_entry[2:]
+
+        return normalized_entry.strip("/").casefold()
 
     def get_latest_version_text(
         self,
@@ -3636,7 +3807,10 @@ class SteamManagerApp:
                 self.get_appmanifest_path(steam_path, game.app_id)
             )
             metadata = app_metadata.get(game.app_id, {})
-            game.compression_state = self.get_compression_state(game.folder)
+            game.compression_state = self.get_compression_state(
+                game.folder,
+                game.app_id,
+            )
             if manifest:
                 game.version = manifest.get("buildid") or UNKNOWN_VERSION
                 game.latest_version = self.get_latest_version_text(manifest, metadata)

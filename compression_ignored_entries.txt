@@ -1,0 +1,24 @@
+# Steam Archive Manager per-game compression ignore list
+#
+# Create one block per game and add one relative file or folder path per line.
+# These entries are ignored when detecting whether a game folder is compressed.
+# Existing ignored entries are preserved during extraction.
+#
+# Example:
+# Jeu 1 | ID: 12345678
+# ./Dossier1
+# ./DossierExemple/FichierExemple.sav
+#
+# Jeu 2 | ID: 987654
+# ./Dossier1
+
+
+Borderlands 4 | ID: 1285190
+./OakGame
+./DossierExemple/FichierExemple.sav
+
+Borderlands 3 | ID: 397540
+./OakGame
+
+Red Faction II | ID: 20550
+./profiles

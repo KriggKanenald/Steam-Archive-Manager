@@ -70,6 +70,8 @@ The application uses Steam local files to detect installed games and available b
 
 Archived games are detected when their installation folder contains a single archive file with a supported extension such as `.7z`, `.rar`, or `.zip`.
 
+If Steam creates extra configuration files or folders next to an archived game, add them to `compression_ignored_entries.txt` under a block containing the game's Steam AppID. These per-game relative paths are ignored when detecting whether the game is archived and are preserved when extracting the archive.
+
 ## Project Background
 
 I created this program to keep my Steam library up to date while compressing games I am not currently using to save disk space. The goal is to keep a local physical copy of my games and avoid having to fully download them again later.
