@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 Steam Archive Manager - USB/
 portable-python/
+.codex-share-profile*/
+.codex-share-page.png

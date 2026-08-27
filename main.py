@@ -779,9 +779,8 @@ class SteamManagerApp:
             "<Configure>",
             self.on_canvas_configure,
         )
-        self.root.bind_all("<MouseWheel>", self.on_mousewheel, add="+")
-        self.root.bind_all("<Button-4>", self.on_mousewheel, add="+")
-        self.root.bind_all("<Button-5>", self.on_mousewheel, add="+")
+        self.bind_scroll_events(self.root)
+        self.bind_scroll_events(self.vertical_scrollbar)
         self.root.bind_all("<Button-2>", self.on_middle_click, add="+")
         self.root.bind_all("<Motion>", self.on_autoscroll_motion, add="+")
         self.root.bind_all("<Escape>", self.cancel_autoscroll, add="+")
@@ -793,22 +792,55 @@ class SteamManagerApp:
         self.update_button.config(text=self.t("button_update"))
         self.update_all_button.config(text=self.t("button_update_all"))
 
+    def bind_scroll_events(self, widget: tk.Widget) -> None:
+        widget.bind("<MouseWheel>", self.on_mousewheel)
+        widget.bind("<Button-4>", self.on_mousewheel)
+        widget.bind("<Button-5>", self.on_mousewheel)
+        try:
+            widget.bind("<TouchpadScroll>", self.on_touchpad_scroll)
+        except tk.TclError:
+            # TouchpadScroll was introduced in Tk 9. Tk 8 uses MouseWheel.
+            pass
+
     def on_mousewheel(self, event: tk.Event) -> str | None:
-        if not self.display_items or not self.is_event_inside_game_canvas(event):
+        if not self.display_items:
             return None
 
         scroll_delta = self.get_mousewheel_scroll_delta(event)
         if scroll_delta == 0:
             return None
 
+        self.apply_scroll_delta(scroll_delta)
+        return "break"
+
+    def on_touchpad_scroll(self, event: tk.Event) -> str | None:
+        if not self.display_items:
+            return None
+
+        try:
+            _, delta_y = self.root.tk.call(
+                "tk::PreciseScrollDeltas",
+                event.delta,
+            )
+            scroll_delta = float(
+                self.root.tk.call("tk::ScaleNum", -int(delta_y))
+            )
+        except (AttributeError, TypeError, ValueError, tk.TclError):
+            return None
+
+        if scroll_delta == 0:
+            return "break"
+
+        self.apply_scroll_delta(scroll_delta)
+        return "break"
+
+    def apply_scroll_delta(self, scroll_delta: float) -> None:
         self.mousewheel_pixel_remainder += scroll_delta
 
         pixel_delta = int(self.mousewheel_pixel_remainder)
         if pixel_delta:
             self.mousewheel_pixel_remainder -= pixel_delta
             self.scroll_virtual_pixels(pixel_delta)
-
-        return "break"
 
     def get_mousewheel_scroll_delta(self, event: tk.Event) -> float:
         event_number = getattr(event, "num", None)
@@ -932,8 +964,7 @@ class SteamManagerApp:
                 fraction = float(args[1])
             except ValueError:
                 return
-            max_scroll = self.get_max_virtual_scroll()
-            self.virtual_scroll_y = int(max_scroll * fraction)
+            self.virtual_scroll_y = round(self.total_content_height * fraction)
         elif args[0] == "scroll" and len(args) >= 3:
             try:
                 amount = int(args[1])
