@@ -3788,9 +3788,39 @@ class SteamManagerApp:
         try:
             state_flags = int(manifest.get("stateflags", "0"))
         except (TypeError, ValueError):
+            state_flags = 0
+
+        return bool(
+            state_flags & STEAM_STATE_UPDATE_REQUIRED
+            or self.manifest_has_pending_steam_transfer(manifest)
+        )
+
+    def manifest_has_pending_steam_transfer(self, manifest: dict[str, str]) -> bool:
+        return (
+            self.manifest_counter_has_remaining(
+                manifest.get("bytesdownloaded", ""),
+                manifest.get("bytestodownload", ""),
+            )
+            or self.manifest_counter_has_remaining(
+                manifest.get("bytesstaged", ""),
+                manifest.get("bytestostage", ""),
+            )
+        )
+
+    def manifest_counter_has_remaining(
+        self,
+        current_value: str,
+        total_value: str,
+    ) -> bool:
+        total = self.parse_positive_int(total_value)
+        if not total:
             return False
 
-        return bool(state_flags & STEAM_STATE_UPDATE_REQUIRED)
+        current = self.parse_positive_int(current_value)
+        if current is None:
+            return True
+
+        return current < total
 
     def refresh_games_metadata(
         self,
