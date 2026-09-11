@@ -1193,9 +1193,9 @@ class SteamManagerApp:
             item_type, item_value = item
             if item_type == "game":
                 game = item_value
-                game_path = str(game.folder)
-                self.games_by_path[game_path] = game
-                self.game_selection[game_path] = tk.BooleanVar(value=False)
+                game_key = self.get_game_selection_key(game)
+                self.games_by_path[game_key] = game
+                self.game_selection[game_key] = tk.BooleanVar(value=False)
 
         self.clamp_virtual_scroll()
         self.render_visible_game_rows()
@@ -1550,12 +1550,12 @@ class SteamManagerApp:
         visual_index: int,
     ) -> None:
         row_background = "#ffffff" if visual_index % 2 == 0 else "#f7f7f7"
-        game_path = str(game.folder)
-        selected = self.game_selection.get(game_path)
+        game_key = self.get_game_selection_key(game)
+        selected = self.game_selection.get(game_key)
         if selected is None:
             selected = tk.BooleanVar(value=False)
-            self.game_selection[game_path] = selected
-        self.games_by_path[game_path] = game
+            self.game_selection[game_key] = selected
+        self.games_by_path[game_key] = game
 
         slot["game"] = game
         slot["type"] = "game"
@@ -1654,11 +1654,11 @@ class SteamManagerApp:
         if game is None:
             return "break"
 
-        game_path = str(game.folder)
-        selected = self.game_selection.get(game_path)
+        game_key = self.get_game_selection_key(game)
+        selected = self.game_selection.get(game_key)
         if selected is None:
             selected = tk.BooleanVar(value=False)
-            self.game_selection[game_path] = selected
+            self.game_selection[game_key] = selected
 
         selected.set(not selected.get())
         self.update_select_all_state()
@@ -1917,6 +1917,7 @@ class SteamManagerApp:
             for game in selected_games
             if not self.is_game_up_to_date(game)
         ]
+        games_to_update = self.get_unique_folder_games(games_to_update)
         skipped_count = len(selected_games) - len(games_to_update)
         if not games_to_update:
             messagebox.showinfo(
@@ -2020,6 +2021,7 @@ class SteamManagerApp:
             )
             return
 
+        selected_games = self.get_unique_folder_games(selected_games)
         for game in selected_games:
             game.compression_state = self.get_compression_state(
                 game.folder,
@@ -2123,10 +2125,20 @@ class SteamManagerApp:
 
     def get_selected_games(self) -> list[SteamGame]:
         return [
-            self.games_by_path[game_path]
-            for game_path, selected in self.game_selection.items()
-            if selected.get() and game_path in self.games_by_path
+            self.games_by_path[game_key]
+            for game_key, selected in self.game_selection.items()
+            if selected.get() and game_key in self.games_by_path
         ]
+
+    def get_game_selection_key(self, game: SteamGame) -> str:
+        return game.app_id or str(game.folder)
+
+    def get_unique_folder_games(self, games: list[SteamGame]) -> list[SteamGame]:
+        unique_games = {}
+        for game in games:
+            unique_games.setdefault(str(game.folder).casefold(), game)
+
+        return list(unique_games.values())
 
     def get_valid_steam_path(self) -> Path | None:
         steam_path_value = self.config.data.get("steam_path", "")
@@ -3159,12 +3171,12 @@ class SteamManagerApp:
         background_index = index if visual_index is None else visual_index
         row_background = "#ffffff" if background_index % 2 == 0 else "#f7f7f7"
 
-        game_path = str(game.folder)
-        selected = self.game_selection.get(game_path)
+        game_key = self.get_game_selection_key(game)
+        selected = self.game_selection.get(game_key)
         if selected is None:
             selected = tk.BooleanVar(value=False)
-            self.game_selection[game_path] = selected
-        self.games_by_path[str(game.folder)] = game
+            self.game_selection[game_key] = selected
+        self.games_by_path[game_key] = game
 
         def toggle_row_selection(event: tk.Event | None = None) -> str:
             selected.set(not selected.get())
@@ -3501,8 +3513,7 @@ class SteamManagerApp:
         if not common_path.is_dir():
             raise FileNotFoundError(self.t("message_common_missing"))
 
-        installed_apps = []
-        app_ids = set()
+        install_candidates = []
         for manifest_path in steamapps_path.glob("appmanifest_*.acf"):
             manifest = self.parse_appmanifest(manifest_path)
             app_id = manifest.get("appid", "").strip()
@@ -3514,8 +3525,22 @@ class SteamManagerApp:
             if not game_folder.is_dir():
                 continue
 
-            installed_apps.append((game_folder, manifest))
-            app_ids.add(app_id)
+            install_candidates.append((game_folder, manifest))
+
+        owned_install_folders = {
+            str(game_folder).casefold()
+            for game_folder, manifest in install_candidates
+            if not self.is_unowned_manifest(manifest)
+        }
+        installed_apps = [
+            (game_folder, manifest)
+            for game_folder, manifest in install_candidates
+            if not (
+                self.is_unowned_manifest(manifest)
+                and str(game_folder).casefold() in owned_install_folders
+            )
+        ]
+        app_ids = {manifest.get("appid", "") for _, manifest in installed_apps}
 
         app_metadata = self.read_appinfo_metadata(steam_path, app_ids)
 
@@ -3555,6 +3580,9 @@ class SteamManagerApp:
 
     def is_app_type_tool(self, app_type: str) -> bool:
         return app_type.casefold() == "tool"
+
+    def is_unowned_manifest(self, manifest: dict[str, str]) -> bool:
+        return manifest.get("lastowner", "").strip() == "0"
 
     def get_compression_state(self, game_folder: Path, app_id: str = "") -> str:
         try:
